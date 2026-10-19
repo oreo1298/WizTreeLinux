@@ -1,14 +1,14 @@
 //! The results page: folder tree, largest files, file types and treemap.
 
 use super::columns::{self, ContextFn};
-use super::objects::{node_of, ExtObject, NodeObject};
+use super::objects::{node_of, ChildList, ExtObject, NodeObject};
 use super::start_page::usage_bar;
 use super::treemap_widget::TreemapWidget;
 use crate::format;
 use crate::helper;
 use crate::mounts;
 use crate::settings;
-use crate::tree::{ExtStat, NodeId, Query, SizeMode, Tree, ROOT};
+use crate::tree::{flag, ExtStat, NodeId, Query, SizeMode, Tree, ROOT};
 use crate::treemap;
 use adw::prelude::*;
 use gtk::{gdk, gio, glib};
@@ -27,11 +27,11 @@ struct State {
     tree: Option<Arc<Tree>>,
     mode: SizeMode,
     colors: Arc<Vec<[u8; 3]>>,
-    /// Live tree-view objects, so they can be told about changes.
-    objects: HashMap<NodeId, glib::WeakRef<NodeObject>>,
+    /// The folder tree's top row.
+    root_obj: Option<NodeObject>,
     /// Child models created by the tree view, per directory.
-    stores: HashMap<NodeId, glib::WeakRef<gio::ListStore>>,
-    /// Node the item actions apply to.
+    stores: HashMap<NodeId, glib::WeakRef<ChildList>>,
+    /// Node of the current tree that the item actions apply to.
     context: Option<NodeId>,
     hovered: Option<NodeId>,
     selected: Option<NodeId>,
@@ -111,14 +111,14 @@ impl ResultsView {
             let weak = weak.clone();
             Rc::new(move |widget, x, y, pos, item| {
                 let Some(this) = weak.upgrade() else { return };
-                let Some(node) = node_of(item) else { return };
+                let Some(node) = node_of(item).and_then(|n| this.current_id(&n)) else { return };
                 // Select the row that was right-clicked.
                 if item.is::<gtk::TreeListRow>() {
                     this.tree_sel.set_selected(pos);
                 } else {
                     this.files_sel.set_selected(pos);
                 }
-                this.show_context_menu(widget, x, y, node.id());
+                this.show_context_menu(widget, x, y, node);
             })
         };
 
@@ -537,14 +537,14 @@ impl ResultsView {
         let w = weak.clone();
         self.tree_sel.connect_selection_changed(move |sel, _, _| {
             if let Some(this) = w.upgrade() {
-                let node = sel.selected_item().and_then(|o| node_of(&o)).map(|n| n.id());
+                let node = sel.selected_item().and_then(|o| node_of(&o)).and_then(|n| this.current_id(&n));
                 this.on_list_selection(node);
             }
         });
         let w = weak.clone();
         self.files_sel.connect_selection_changed(move |sel, _, _| {
             if let Some(this) = w.upgrade() {
-                let node = sel.selected_item().and_then(|o| node_of(&o)).map(|n| n.id());
+                let node = sel.selected_item().and_then(|o| node_of(&o)).and_then(|n| this.current_id(&n));
                 this.on_list_selection(node);
             }
         });
@@ -559,9 +559,10 @@ impl ResultsView {
         let w = weak.clone();
         self.files_view.connect_activate(move |_, pos| {
             if let Some(this) = w.upgrade() {
-                if let Some(node) = this.files_sel.item(pos).and_then(|o| node_of(&o)) {
+                if let Some(node) = this.files_sel.item(pos).and_then(|o| node_of(&o)).and_then(|n| this.current_id(&n))
+                {
                     this.view_stack.set_visible_child_name("folders");
-                    this.reveal(node.id());
+                    this.reveal(node);
                 }
             }
         });
@@ -699,15 +700,20 @@ impl ResultsView {
     // ── Showing a tree ──────────────────────────────────────────────────
 
     pub fn set_tree(self: &Rc<Self>, tree: Arc<Tree>) {
+        // Nothing from the previous scan may stay selectable: its node ids
+        // mean something else in the new tree.
+        self.tree_root.remove_all();
+        self.files_store.remove_all();
         let mode = settings::get().size_mode;
         let stats = tree.ext_stats(mode);
         let colors = Arc::new(treemap::ext_colors(&stats, tree.ext_count()));
+        let root = NodeObject::new(&tree, ROOT);
         {
             let mut st = self.state.borrow_mut();
             st.tree = Some(tree.clone());
             st.mode = mode;
             st.colors = colors.clone();
-            st.objects.clear();
+            st.root_obj = Some(root.clone());
             st.stores.clear();
             st.context = None;
             st.hovered = None;
@@ -717,9 +723,6 @@ impl ResultsView {
         self.treemap.set_style(settings::get().treemap_style);
         self.treemap.set_tree(Some(tree.clone()), colors.clone());
 
-        self.tree_root.remove_all();
-        let root = NodeObject::new(&tree, ROOT);
-        self.state.borrow_mut().objects.insert(ROOT, root.downgrade());
         self.tree_root.append(&root);
         if let Some(row) = self.tree_model.row(0) {
             row.set_expanded(true);
@@ -745,7 +748,7 @@ impl ResultsView {
         {
             let mut st = self.state.borrow_mut();
             st.tree = None;
-            st.objects.clear();
+            st.root_obj = None;
             st.stores.clear();
             st.context = None;
         }
@@ -765,21 +768,28 @@ impl ResultsView {
         self.ext_view.sort_by_column(Some(&self.ext_size_col), gtk::SortType::Descending);
     }
 
+    /// The node id of `obj` if it belongs to the tree currently shown.
+    fn current_id(&self, obj: &NodeObject) -> Option<NodeId> {
+        let st = self.state.borrow();
+        let current = st.tree.as_ref()?;
+        (Arc::ptr_eq(current, obj.tree()) && !current.is_deleted(obj.id())).then(|| obj.id())
+    }
+
+    fn is_current(&self, tree: &Arc<Tree>) -> bool {
+        self.state.borrow().tree.as_ref().is_some_and(|t| Arc::ptr_eq(t, tree))
+    }
+
+    /// Children of a folder row. GTK calls this every time it needs to know
+    /// whether a collapsed row can be expanded, so it must stay cheap.
     fn child_model(&self, node: &NodeObject) -> Option<gio::ListModel> {
         let tree = node.tree();
         let id = node.id();
-        if !tree.is_dir(id) || !tree.has_live_children(id) {
+        if !self.is_current(tree) || !tree.is_dir(id) || !tree.has_live_children(id) {
             return None;
         }
-        let store = gio::ListStore::new::<NodeObject>();
-        let objs: Vec<NodeObject> = tree.live_children(id).map(|c| NodeObject::new(tree, c)).collect();
-        store.extend_from_slice(&objs);
-        let mut st = self.state.borrow_mut();
-        for o in &objs {
-            st.objects.insert(o.id(), o.downgrade());
-        }
-        st.stores.insert(id, store.downgrade());
-        Some(store.upcast())
+        let model = ChildList::new(tree, id);
+        self.state.borrow_mut().stores.insert(id, model.downgrade());
+        Some(model.upcast())
     }
 
     fn fill_ext(&self, tree: &Tree, stats: &[ExtStat], colors: &[[u8; 3]]) {
@@ -991,11 +1001,11 @@ impl ResultsView {
     // ── Selection ───────────────────────────────────────────────────────
 
     fn tree_selected(&self) -> Option<NodeId> {
-        self.tree_sel.selected_item().and_then(|o| node_of(&o)).map(|n| n.id())
+        self.tree_sel.selected_item().and_then(|o| node_of(&o)).and_then(|n| self.current_id(&n))
     }
 
     fn files_selected(&self) -> Option<NodeId> {
-        self.files_sel.selected_item().and_then(|o| node_of(&o)).map(|n| n.id())
+        self.files_sel.selected_item().and_then(|o| node_of(&o)).and_then(|n| self.current_id(&n))
     }
 
     fn on_list_selection(&self, node: Option<NodeId>) {
@@ -1129,7 +1139,7 @@ impl ResultsView {
         for name in ["open", "show", "copy", "trash", "delete", "zoom"] {
             let enabled = match (&tree, node) {
                 (Some(t), Some(id)) if valid(id, t) => match name {
-                    "trash" | "delete" => id != ROOT,
+                    "trash" | "delete" => id != ROOT && !t.has_flag(id, flag::MOUNT | flag::VIRTUAL),
                     "zoom" => t.is_dir(id) && t.has_live_children(id),
                     "show" => id != ROOT || t.root_path.parent().is_some(),
                     _ => true,
@@ -1195,7 +1205,34 @@ impl ResultsView {
         }
     }
 
+    /// Refuses to remove anything that has another filesystem mounted on or
+    /// inside it; deleting it would wipe that filesystem too.
+    fn blocked_by_mount(&self, tree: &Tree, node: NodeId) -> bool {
+        let path = tree.path(node);
+        let mounts = mounts::read_mounts();
+        let Some(m) = mounts::mount_at_or_below(&mounts, &path) else { return false };
+        let name = tree.display_name(node);
+        self.toast(&format!(
+            "“{name}” was left alone because a drive is mounted at {}. Unmount it first.",
+            m.mount_point.display()
+        ));
+        true
+    }
+
+    /// " (12 MiB)" for the space an item frees, or a note when other hard
+    /// links keep the data.
+    fn freed(tree: &Tree, node: NodeId) -> String {
+        if !tree.is_dir(node) && tree.has_flag(node, flag::LINKED) {
+            ". Other hard links still use its data".to_string()
+        } else {
+            format!(" ({})", format::size(tree.alloc_size(node)))
+        }
+    }
+
     fn trash(self: &Rc<Self>, tree: Arc<Tree>, node: NodeId) {
+        if self.blocked_by_mount(&tree, node) {
+            return;
+        }
         let path = tree.path(node);
         let name = tree.display_name(node);
         let weak = Rc::downgrade(self);
@@ -1204,9 +1241,12 @@ impl ResultsView {
             let Some(this) = weak.upgrade() else { return };
             match result {
                 Ok(()) => {
-                    let freed = format::size(tree.alloc_size(node));
-                    this.on_deleted(&tree, node);
-                    this.toast(&format!("Moved “{name}” to the trash ({freed})"));
+                    let freed = Self::freed(&tree, node);
+                    // A new scan may have replaced the tree in the meantime.
+                    if this.is_current(&tree) {
+                        this.on_deleted(&tree, node);
+                    }
+                    this.toast(&format!("Moved “{name}” to the trash{freed}"));
                 }
                 Err(e) if e.matches(gio::IOErrorEnum::NotSupported) => {
                     let toast = adw::Toast::new(&glib::markup_escape_text(&format!(
@@ -1216,7 +1256,9 @@ impl ResultsView {
                     let weak = Rc::downgrade(&this);
                     toast.connect_button_clicked(move |_| {
                         if let Some(this) = weak.upgrade() {
-                            this.confirm_delete(tree.clone(), node);
+                            if this.is_current(&tree) {
+                                this.confirm_delete(tree.clone(), node);
+                            }
                         }
                     });
                     this.toasts.add_toast(toast);
@@ -1228,6 +1270,9 @@ impl ResultsView {
 
     fn confirm_delete(self: &Rc<Self>, tree: Arc<Tree>, node: NodeId) {
         let Some(window) = self.window.upgrade() else { return };
+        if self.blocked_by_mount(&tree, node) {
+            return;
+        }
         let name = tree.display_name(node);
         let body = if tree.is_dir(node) {
             format!(
@@ -1250,7 +1295,9 @@ impl ResultsView {
                 return;
             }
             let Some(this) = weak.upgrade() else { return };
-            this.delete(tree.clone(), node);
+            if this.is_current(&tree) {
+                this.delete(tree.clone(), node);
+            }
         });
         dialog.present(Some(&window));
     }
@@ -1262,23 +1309,16 @@ impl ResultsView {
         let weak = Rc::downgrade(self);
         glib::spawn_future_local(async move {
             let p = path.clone();
-            let result =
-                gio::spawn_blocking(
-                    move || {
-                        if is_dir {
-                            std::fs::remove_dir_all(&p)
-                        } else {
-                            std::fs::remove_file(&p)
-                        }
-                    },
-                )
-                .await;
+            let result = gio::spawn_blocking(move || crate::remove::remove_all(&p)).await;
             let Some(this) = weak.upgrade() else { return };
             match result {
                 Ok(Ok(())) => {
-                    let freed = format::size(tree.alloc_size(node));
-                    this.on_deleted(&tree, node);
-                    this.toast(&format!("Deleted “{name}” ({freed})"));
+                    let freed = Self::freed(&tree, node);
+                    // A new scan may have replaced the tree in the meantime.
+                    if this.is_current(&tree) {
+                        this.on_deleted(&tree, node);
+                    }
+                    this.toast(&format!("Deleted “{name}”{freed}"));
                 }
                 Ok(Err(e)) => {
                     let partial = is_dir && path.exists();
@@ -1299,13 +1339,9 @@ impl ResultsView {
             return;
         }
         let parent = tree.parent(node);
-        let store = parent.and_then(|p| self.state.borrow().stores.get(&p).and_then(|w| w.upgrade()));
-        if let Some(store) = store {
-            let pos = (0..store.n_items())
-                .find(|&i| store.item(i).and_downcast::<NodeObject>().is_some_and(|o| o.id() == node));
-            if let Some(pos) = pos {
-                store.remove(pos);
-            }
+        let model = parent.and_then(|p| self.state.borrow().stores.get(&p).and_then(|w| w.upgrade()));
+        if let Some(model) = model {
+            model.remove_node(node);
         }
         // Ancestors changed size, which also changes their children's
         // percentages, so refresh every row that is currently shown.
@@ -1337,8 +1373,12 @@ impl ResultsView {
     fn refresh_rows(&self) {
         let live: Vec<NodeObject> = {
             let mut st = self.state.borrow_mut();
-            st.objects.retain(|_, w| w.upgrade().is_some());
-            st.objects.values().filter_map(|w| w.upgrade()).collect()
+            st.stores.retain(|_, w| w.upgrade().is_some());
+            let mut live: Vec<NodeObject> = st.root_obj.iter().cloned().collect();
+            for model in st.stores.values().filter_map(|w| w.upgrade()) {
+                live.extend(model.created_objects());
+            }
+            live
         };
         for o in live {
             o.emit_changed();

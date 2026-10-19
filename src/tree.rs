@@ -66,6 +66,8 @@ pub mod flag {
     pub const DELETED: u8 = 8;
     /// Mount point of a virtual filesystem (procfs, sysfs, ...).
     pub const VIRTUAL: u8 = 16;
+    /// A file with more than one hard link.
+    pub const LINKED: u8 = 32;
 }
 
 /// Which size is used for sorting, percentages and the treemap.
@@ -344,8 +346,8 @@ impl Tree {
             let s = &mut stats[n.ext as usize];
             s.count += 1;
             if f & flag::HARDLINK == 0 {
-                s.size += n.size.load(Relaxed);
-                s.alloc += n.alloc.load(Relaxed);
+                s.size = s.size.saturating_add(n.size.load(Relaxed));
+                s.alloc = s.alloc.saturating_add(n.alloc.load(Relaxed));
             }
         }
         stats.retain(|s| s.count > 0);

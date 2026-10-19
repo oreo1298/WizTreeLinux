@@ -12,7 +12,7 @@ use std::io::{self, BufReader, BufWriter, Read, Write};
 use std::os::unix::ffi::{OsStrExt, OsStringExt};
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
-use std::sync::atomic::Ordering::Relaxed;
+use std::sync::atomic::{AtomicBool, Ordering::Relaxed};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -224,6 +224,20 @@ pub fn run(args: &[OsString]) -> i32 {
     }
 }
 
+/// Path of this program for pkexec. After a package upgrade replaced the
+/// binary, /proc reports the old one as "… (deleted)"; the new one lives
+/// at the same place.
+fn program_path() -> io::Result<PathBuf> {
+    let exe = std::env::current_exe()?;
+    if let Some(stripped) = exe.to_str().and_then(|s| s.strip_suffix(" (deleted)")) {
+        let path = PathBuf::from(stripped);
+        if path.is_file() {
+            return Ok(path);
+        }
+    }
+    Ok(exe)
+}
+
 /// Finds `pkexec` in the usual places.
 pub fn pkexec_path() -> Option<PathBuf> {
     let mut dirs: Vec<PathBuf> =
@@ -238,7 +252,7 @@ pub fn scan_elevated(path: &std::path::Path, opts: ScanOptions, progress: &Progr
     let pkexec = pkexec_path().ok_or_else(|| {
         ScanError::Failed("Scanning as administrator needs “pkexec” (part of polkit), which is not installed.".into())
     })?;
-    let exe = std::env::current_exe().map_err(|e| ScanError::Failed(format!("Cannot locate the program: {e}")))?;
+    let exe = program_path().map_err(|e| ScanError::Failed(format!("Cannot locate the program: {e}")))?;
     let mut cmd = Command::new(pkexec);
     cmd.arg(exe).arg(HELPER_ARG);
     if opts.one_filesystem {
@@ -264,7 +278,7 @@ pub fn scan_elevated(path: &std::path::Path, opts: ScanOptions, progress: &Progr
 
     let stdout = child.stdout.take().unwrap();
     let mut r = BufReader::with_capacity(1 << 20, stdout);
-    let result = (|| -> io::Result<Option<Result<Tree, String>>> {
+    let read_all = |r: &mut BufReader<std::process::ChildStdout>| -> io::Result<Option<Result<Tree, String>>> {
         let mut magic = [0u8; 8];
         r.read_exact(&mut magic)?;
         if &magic != MAGIC {
@@ -278,19 +292,42 @@ pub fn scan_elevated(path: &std::path::Path, opts: ScanOptions, progress: &Progr
             r.read_exact(&mut tag)?;
             match tag[0] {
                 MSG_PROGRESS => {
-                    progress.files.store(get_u64(&mut r)?, Relaxed);
-                    progress.dirs.store(get_u64(&mut r)?, Relaxed);
-                    progress.bytes.store(get_u64(&mut r)?, Relaxed);
-                    progress.errors.store(get_u64(&mut r)?, Relaxed);
-                    let cur = PathBuf::from(OsString::from_vec(get_bytes(&mut r)?));
+                    progress.files.store(get_u64(r)?, Relaxed);
+                    progress.dirs.store(get_u64(r)?, Relaxed);
+                    progress.bytes.store(get_u64(r)?, Relaxed);
+                    progress.errors.store(get_u64(r)?, Relaxed);
+                    let cur = PathBuf::from(OsString::from_vec(get_bytes(r)?));
                     progress.set_current(&cur);
                 }
-                MSG_TREE => return Ok(Some(Ok(read_tree(&mut r)?))),
-                MSG_ERROR => return Ok(Some(Err(String::from_utf8_lossy(&get_bytes(&mut r)?).into_owned()))),
+                MSG_TREE => return Ok(Some(Ok(read_tree(r)?))),
+                MSG_ERROR => return Ok(Some(Err(String::from_utf8_lossy(&get_bytes(r)?).into_owned()))),
                 _ => return Err(bad("unexpected message from the scan helper")),
             }
         }
-    })();
+    };
+    // While the password dialog is open nothing arrives on the pipe, but
+    // pkexec still runs with our user id and can be stopped. (Once the helper
+    // runs as root this fails harmlessly; it then stops by itself when the
+    // pipe is closed.) The child is reaped only after the watcher is done,
+    // so its pid cannot be reused in between.
+    let done = AtomicBool::new(false);
+    let pid = rustix::process::Pid::from_raw(child.id() as i32);
+    let result = std::thread::scope(|s| {
+        s.spawn(|| {
+            while !done.load(Relaxed) {
+                if progress.is_cancelled() {
+                    if let Some(pid) = pid {
+                        let _ = rustix::process::kill_process(pid, rustix::process::Signal::TERM);
+                    }
+                    return;
+                }
+                std::thread::sleep(Duration::from_millis(100));
+            }
+        });
+        let result = read_all(&mut r);
+        done.store(true, Relaxed);
+        result
+    });
     // Closing our end makes the helper exit on its next progress update.
     drop(r);
     let status = child.wait().ok();

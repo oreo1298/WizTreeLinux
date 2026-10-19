@@ -1,6 +1,5 @@
 //! Preferences dialog.
 
-use crate::format;
 use crate::scanner;
 use crate::settings::{self, ColorScheme, TreemapStyle};
 use crate::tree::SizeMode;
@@ -15,10 +14,7 @@ fn combo(title: &str, subtitle: &str, items: &[&str], selected: u32) -> adw::Com
 }
 
 fn changed() {
-    let s = settings::get();
-    format::set_decimal_units(s.decimal_units);
-    super::apply_color_scheme();
-    super::window::for_each_window(|w| w.apply_settings());
+    super::settings_changed();
 }
 
 pub fn show(parent: &impl IsA<gtk::Widget>) {

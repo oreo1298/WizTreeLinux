@@ -129,16 +129,24 @@ pub fn error_message(err: Errno) -> String {
     }
 }
 
-struct Meta {
-    kind: Kind,
+pub(crate) struct Meta {
+    pub kind: Kind,
     size: u64,
     alloc: u64,
     mtime: i64,
     nlink: u64,
     ino: u64,
-    dev: u64,
+    pub dev: u64,
     mnt_id: Option<u64>,
-    mount_root: Option<bool>,
+    pub mount_root: Option<bool>,
+}
+
+impl Meta {
+    /// Whether this directory is the root of a different mount than a
+    /// parent on device `parent_dev`.
+    pub fn is_mount_boundary(&self, parent_dev: u64) -> bool {
+        self.mount_root.unwrap_or(self.dev != parent_dev)
+    }
 }
 
 static STATX_UNSUPPORTED: AtomicBool = AtomicBool::new(false);
@@ -201,7 +209,7 @@ fn meta_from_stat(st: &rustix::fs::Stat) -> Meta {
 
 /// `stat` of `name` inside `dirfd`, without following symlinks or
 /// triggering automounts.
-fn stat_at(dirfd: BorrowedFd<'_>, name: &CStr) -> Result<Meta, Errno> {
+pub(crate) fn stat_at(dirfd: BorrowedFd<'_>, name: &CStr) -> Result<Meta, Errno> {
     if !STATX_UNSUPPORTED.load(Relaxed) {
         let flags = AtFlags::SYMLINK_NOFOLLOW | AtFlags::NO_AUTOMOUNT | AtFlags::STATX_DONT_SYNC;
         match rustix::fs::statx(dirfd, name, flags, STATX_MASK) {
@@ -225,7 +233,7 @@ fn stat_fd(fd: BorrowedFd<'_>) -> Result<Meta, Errno> {
     Ok(meta_from_stat(&rustix::fs::fstat(fd)?))
 }
 
-fn open_dir(parent: BorrowedFd<'_>, name: &CStr) -> Result<OwnedFd, Errno> {
+pub(crate) fn open_dir(parent: BorrowedFd<'_>, name: &CStr) -> Result<OwnedFd, Errno> {
     let flags = OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC | OFlags::NOCTTY;
     let mut attempts = 0;
     loop {
@@ -280,8 +288,11 @@ struct Totals {
 struct Ctx<'a> {
     opts: ScanOptions,
     progress: &'a Progress,
+    root: PathBuf,
     mounts: Vec<Mount>,
     mounts_by_id: HashMap<u64, usize>,
+    /// Mounts whose contents are part of this scan.
+    entered: Mutex<Vec<Mount>>,
     hardlinks: Vec<Mutex<HashSet<(u64, u64)>>>,
     errors: Mutex<Vec<(PathBuf, String)>>,
     name_bytes: AtomicU64,
@@ -305,12 +316,36 @@ impl Ctx<'_> {
         self.hardlinks[shard].lock().map(|mut s| s.insert((dev, ino))).unwrap_or(true)
     }
 
-    fn fstype_of(&self, meta: &Meta, path: impl FnOnce() -> PathBuf) -> Option<&str> {
+    /// Counts an error without recording its details.
+    fn count_error(&self) {
+        self.progress.errors.fetch_add(1, Relaxed);
+    }
+
+    fn mount_of(&self, meta: &Meta, path: impl FnOnce() -> PathBuf) -> Option<&Mount> {
         if let Some(i) = meta.mnt_id.and_then(|id| self.mounts_by_id.get(&id)) {
-            return Some(&self.mounts[*i].fstype);
+            return Some(&self.mounts[*i]);
         }
         let path = path();
-        self.mounts.iter().rev().find(|m| m.mount_point == path).map(|m| m.fstype.as_str())
+        self.mounts.iter().rev().find(|m| m.mount_point == path)
+    }
+
+    /// Decides whether to descend into another filesystem mounted inside the
+    /// scan. Bind mounts of folders that are scanned anyway, container
+    /// overlays and compressed images would only count data twice.
+    fn should_enter(&self, mount: &Mount) -> bool {
+        if matches!(mount.fstype.as_str(), "overlay" | "squashfs" | "erofs") {
+            return false;
+        }
+        let Ok(mut entered) = self.entered.lock() else { return true };
+        for e in entered.iter().filter(|e| e.dev == mount.dev) {
+            if let Ok(rest) = Path::new(&mount.root).strip_prefix(&e.root) {
+                if e.mount_point.join(rest).starts_with(&self.root) {
+                    return false;
+                }
+            }
+        }
+        entered.push(mount.clone());
+        true
     }
 }
 
@@ -367,22 +402,26 @@ fn scan_dir(ctx: &Ctx, fd: OwnedFd, path: &Path, dev: u64, depth: u32) -> (Box<D
                     e.mtime = m.mtime;
                     e.alloc = m.alloc;
                     if m.kind == Kind::Dir {
-                        let boundary = m.mount_root.unwrap_or(m.dev != dev);
+                        let boundary = m.is_mount_boundary(dev);
                         if !boundary {
                             subdirs.push((entries.len(), m.dev));
                         } else if ctx.opts.one_filesystem {
                             e.flags |= flag::MOUNT;
-                        } else if ctx
-                            .fstype_of(&m, || path.join(OsStr::from_bytes(bytes)))
-                            .is_some_and(mounts::is_virtual_fs)
-                        {
-                            e.flags |= flag::MOUNT | flag::VIRTUAL;
                         } else {
-                            subdirs.push((entries.len(), m.dev));
+                            match ctx.mount_of(&m, || path.join(OsStr::from_bytes(bytes))) {
+                                Some(mount) if mounts::is_virtual_fs(&mount.fstype) => {
+                                    e.flags |= flag::MOUNT | flag::VIRTUAL;
+                                }
+                                Some(mount) if !ctx.should_enter(mount) => e.flags |= flag::MOUNT,
+                                _ => subdirs.push((entries.len(), m.dev)),
+                            }
                         }
                     } else {
                         e.size = m.size;
                         new_files += 1;
+                        if m.nlink > 1 {
+                            e.flags |= flag::LINKED;
+                        }
                         if m.nlink > 1 && !ctx.first_link(m.dev, m.ino) {
                             e.flags |= flag::HARDLINK;
                         } else {
@@ -391,10 +430,13 @@ fn scan_dir(ctx: &Ctx, fd: OwnedFd, path: &Path, dev: u64, depth: u32) -> (Box<D
                     }
                 }
                 Err(err) => {
+                    // Every failure counts; only the first per folder is listed.
                     if !stat_failed {
                         stat_failed = true;
                         dir_flags |= flag::ERROR;
                         ctx.error(&path.join(OsStr::from_bytes(bytes)), err);
+                    } else {
+                        ctx.count_error();
                     }
                     if e.kind == Kind::Dir {
                         e.flags |= flag::ERROR;
@@ -520,11 +562,18 @@ pub fn scan(path: &Path, opts: ScanOptions, progress: &Progress) -> Result<Tree,
 
     let mounts = mounts::read_mounts();
     let mounts_by_id = mounts.iter().enumerate().map(|(i, m)| (m.id, i)).collect();
+    let root_mount = meta
+        .mnt_id
+        .and_then(|id| mounts.iter().find(|m| m.id == id))
+        .or_else(|| mounts::mount_for_path(&mounts, &root_path))
+        .cloned();
     let ctx = Ctx {
         opts,
         progress,
+        root: root_path.clone(),
         mounts,
         mounts_by_id,
+        entered: Mutex::new(root_mount.into_iter().collect()),
         hardlinks: (0..HARDLINK_SHARDS).map(|_| Mutex::new(HashSet::new())).collect(),
         errors: Mutex::new(Vec::new()),
         name_bytes: AtomicU64::new(0),
@@ -701,6 +750,38 @@ mod tests {
         let expected: u64 = 50 * (0..40).map(|j| j * 10).sum::<u64>() + 5;
         assert_eq!(tree.logical_size(ROOT), expected);
         fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn bind_mounts_are_not_counted_twice() {
+        if !rustix::process::geteuid().is_root() {
+            return;
+        }
+        let dir = temp_dir("bind");
+        let outside = temp_dir("bind-outside");
+        fs::create_dir_all(dir.join("data")).unwrap();
+        fs::write(dir.join("data/f"), vec![1u8; 100_000]).unwrap();
+        fs::write(outside.join("g"), vec![2u8; 50_000]).unwrap();
+        fs::create_dir(dir.join("again")).unwrap();
+        fs::create_dir(dir.join("ext")).unwrap();
+        let bind = |src: &Path, dst: &Path| {
+            std::process::Command::new("mount").arg("--bind").arg(src).arg(dst).status().is_ok_and(|s| s.success())
+        };
+        if !bind(&dir.join("data"), &dir.join("again")) {
+            return; // not allowed to mount here
+        }
+        assert!(bind(&outside, &dir.join("ext")));
+        let opts = ScanOptions { one_filesystem: false, threads: 2 };
+        let tree = scan(&dir, opts, &Progress::default());
+        let _ = std::process::Command::new("umount").arg(dir.join("again")).status();
+        let _ = std::process::Command::new("umount").arg(dir.join("ext")).status();
+        let tree = tree.unwrap();
+        // data/f once, plus the bind mount of a folder outside the scan.
+        assert_eq!(tree.logical_size(ROOT), 150_000);
+        assert!(tree.has_flag(find(&tree, ROOT, "again"), flag::MOUNT));
+        assert!(!tree.has_flag(find(&tree, ROOT, "ext"), flag::MOUNT));
+        fs::remove_dir_all(&dir).unwrap();
+        fs::remove_dir_all(&outside).unwrap();
     }
 
     #[test]

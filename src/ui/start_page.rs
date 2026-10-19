@@ -18,6 +18,8 @@ pub struct StartPage {
     drives: adw::PreferencesGroup,
     drive_rows: RefCell<Vec<adw::ActionRow>>,
     on_scan: RefCell<Option<ScanFn>>,
+    elevated_row: adw::SwitchRow,
+    one_fs_row: adw::SwitchRow,
     mount_monitor: gio::UnixMountMonitor,
     mount_handler: RefCell<Option<glib::SignalHandlerId>>,
 }
@@ -129,7 +131,10 @@ impl StartPage {
         elevated_row.set_visible(!root_user && helper::pkexec_path().is_some());
         elevated_row.connect_active_notify(|row| {
             let v = row.is_active();
-            settings::update(|s| s.elevated = v);
+            if settings::get().elevated != v {
+                settings::update(|s| s.elevated = v);
+                super::settings_changed();
+            }
         });
         let one_fs_row = adw::SwitchRow::builder()
             .title("Stay on One Filesystem")
@@ -138,7 +143,10 @@ impl StartPage {
             .build();
         one_fs_row.connect_active_notify(|row| {
             let v = row.is_active();
-            settings::update(|s| s.one_filesystem = v);
+            if settings::get().one_filesystem != v {
+                settings::update(|s| s.one_filesystem = v);
+                super::settings_changed();
+            }
         });
         options.add(&elevated_row);
         options.add(&one_fs_row);
@@ -161,6 +169,8 @@ impl StartPage {
             drives,
             drive_rows: RefCell::default(),
             on_scan: RefCell::default(),
+            elevated_row,
+            one_fs_row,
             mount_monitor: gio::UnixMountMonitor::get(),
             mount_handler: RefCell::default(),
         });
@@ -193,6 +203,13 @@ impl StartPage {
         page.mount_handler.replace(Some(handler));
         page.refresh_drives();
         page
+    }
+
+    /// Shows settings that were changed elsewhere (preferences, other windows).
+    pub fn sync_settings(&self) {
+        let s = settings::get();
+        self.elevated_row.set_active(s.elevated);
+        self.one_fs_row.set_active(s.one_filesystem);
     }
 
     pub fn connect_scan(&self, f: impl Fn(PathBuf) + 'static) {

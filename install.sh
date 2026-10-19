@@ -338,7 +338,7 @@ do_uninstall() {
   case $inst_method in
     pkg)
       step "Removing the dendro package"
-      as_root pacman -R dendro
+      if [[ $yes == 1 ]]; then as_root pacman -R --noconfirm dendro; else as_root pacman -R dendro; fi
       ;;
     make)
       step "Removing Dendro from $inst_prefix"

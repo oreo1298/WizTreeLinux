@@ -348,6 +348,7 @@ impl Window {
 
     /// Re-applies preferences after they changed.
     pub fn apply_settings(&self) {
+        self.inner.start.sync_settings();
         self.inner.results.apply_settings();
     }
 }

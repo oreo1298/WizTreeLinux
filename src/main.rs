@@ -3,6 +3,7 @@
 mod format;
 mod helper;
 mod mounts;
+mod remove;
 mod scanner;
 mod settings;
 mod tree;
@@ -18,6 +19,7 @@ A fast disk space analyzer. Opens a window and, if FOLDER is given,
 starts scanning it right away.
 
 Options:
+  --new-window     Open a new window even if Dendro is already running
   -h, --help       Show this help
   -V, --version    Show the version
 ";

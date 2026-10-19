@@ -23,7 +23,7 @@ ifneq ($(filter /usr /usr/local,$(PREFIX)),)
 POLKIT_DIR  ?= /usr/share/polkit-1/actions
 endif
 
-.PHONY: all build check install uninstall clean
+.PHONY: all build check install uninstall clean refresh-caches
 
 all: build
 
@@ -47,10 +47,7 @@ ifneq ($(POLKIT_DIR),)
 	sed 's|@BINDIR@|$(BINDIR)|g' data/$(APP_ID).policy.in > "$(DESTDIR)$(POLKIT_DIR)/$(APP_ID).policy"
 	chmod 644 "$(DESTDIR)$(POLKIT_DIR)/$(APP_ID).policy"
 endif
-	@if [ -z "$(DESTDIR)" ]; then \
-		gtk-update-icon-cache -qtf "$(DATADIR)/icons/hicolor" 2>/dev/null || true; \
-		update-desktop-database -q "$(DATADIR)/applications" 2>/dev/null || true; \
-	fi
+	@$(MAKE) --no-print-directory refresh-caches
 	@echo "Installed Dendro to $(DESTDIR)$(PREFIX)"
 
 uninstall:
@@ -62,11 +59,19 @@ uninstall:
 ifneq ($(POLKIT_DIR),)
 	rm -f "$(DESTDIR)$(POLKIT_DIR)/$(APP_ID).policy"
 endif
+	@$(MAKE) --no-print-directory refresh-caches
+	@echo "Removed Dendro from $(DESTDIR)$(PREFIX)"
+
+# Only refresh an icon cache that already exists: creating one in a
+# directory that never had one (e.g. ~/.local) would hide icons that other
+# programs add later without updating it.
+refresh-caches:
 	@if [ -z "$(DESTDIR)" ]; then \
-		gtk-update-icon-cache -qtf "$(DATADIR)/icons/hicolor" 2>/dev/null || true; \
+		if [ -f "$(DATADIR)/icons/hicolor/icon-theme.cache" ]; then \
+			gtk-update-icon-cache -qtf "$(DATADIR)/icons/hicolor" 2>/dev/null || true; \
+		fi; \
 		update-desktop-database -q "$(DATADIR)/applications" 2>/dev/null || true; \
 	fi
-	@echo "Removed Dendro from $(DESTDIR)$(PREFIX)"
 
 clean:
 	$(CARGO) clean

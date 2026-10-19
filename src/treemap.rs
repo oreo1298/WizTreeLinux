@@ -216,7 +216,7 @@ impl Renderer<'_> {
                 .collect();
             if !kids.is_empty() {
                 kids.sort_unstable_by_key(|k| std::cmp::Reverse(k.0));
-                let total = kids.iter().map(|k| k.0).sum();
+                let total = kids.iter().fold(0u64, |sum, k| sum.saturating_add(k.0));
                 self.squarify(&kids, r, total, s, h * HEIGHT_SCALE);
                 return;
             }

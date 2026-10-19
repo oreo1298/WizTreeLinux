@@ -134,8 +134,12 @@ pub fn read_mounts() -> Vec<Mount> {
     std::fs::read_to_string("/proc/self/mountinfo").map(|t| parse_mountinfo(&t)).unwrap_or_default()
 }
 
+/// A filesystem mounted at `path` or anywhere below it.
+pub fn mount_at_or_below<'a>(mounts: &'a [Mount], path: &Path) -> Option<&'a Mount> {
+    mounts.iter().find(|m| m.mount_point.starts_with(path))
+}
+
 /// The mount that contains `path` (longest matching mount point).
-#[cfg(test)]
 pub fn mount_for_path<'a>(mounts: &'a [Mount], path: &Path) -> Option<&'a Mount> {
     mounts.iter().filter(|m| path.starts_with(&m.mount_point)).max_by_key(|m| m.mount_point.as_os_str().len())
 }

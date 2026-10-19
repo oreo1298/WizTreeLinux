@@ -140,3 +140,100 @@ pub fn node_of(item: &glib::Object) -> Option<NodeObject> {
     }
     item.clone().downcast::<NodeObject>().ok()
 }
+
+mod child_list_imp {
+    use super::*;
+    use gtk::gio;
+    use gtk::gio::subclass::prelude::*;
+    use std::cell::{Cell, OnceCell, RefCell};
+
+    /// Child node ids and the row objects created for them so far.
+    pub type Items = (Vec<NodeId>, Vec<Option<NodeObject>>);
+
+    #[derive(Default)]
+    pub struct ChildList {
+        pub tree: OnceCell<Arc<Tree>>,
+        pub parent: Cell<NodeId>,
+        /// Live children and their objects, filled on first use.
+        pub items: RefCell<Option<Items>>,
+    }
+
+    #[glib::object_subclass]
+    impl ObjectSubclass for ChildList {
+        const NAME: &'static str = "DendroChildList";
+        type Type = super::ChildList;
+        type Interfaces = (gio::ListModel,);
+    }
+
+    impl ObjectImpl for ChildList {}
+
+    impl ChildList {
+        pub fn with_items<R>(&self, f: impl FnOnce(&mut Vec<NodeId>, &mut Vec<Option<NodeObject>>) -> R) -> R {
+            let mut items = self.items.borrow_mut();
+            let (ids, objs) = items.get_or_insert_with(|| {
+                let tree = self.tree.get().expect("child list without tree");
+                let ids: Vec<NodeId> = tree.live_children(self.parent.get()).collect();
+                let objs = vec![None; ids.len()];
+                (ids, objs)
+            });
+            f(ids, objs)
+        }
+    }
+
+    impl ListModelImpl for ChildList {
+        fn item_type(&self) -> glib::Type {
+            NodeObject::static_type()
+        }
+
+        fn n_items(&self) -> u32 {
+            self.with_items(|ids, _| ids.len() as u32)
+        }
+
+        fn item(&self, position: u32) -> Option<glib::Object> {
+            let tree = self.tree.get()?.clone();
+            self.with_items(|ids, objs| {
+                let id = *ids.get(position as usize)?;
+                let obj = objs[position as usize].get_or_insert_with(|| NodeObject::new(&tree, id));
+                Some(obj.clone().upcast())
+            })
+        }
+    }
+}
+
+glib::wrapper! {
+    /// The children of one folder, as a list model that creates row
+    /// objects only when GTK asks for them. GTK creates these models just
+    /// to find out whether a row can be expanded, so they must be cheap.
+    pub struct ChildList(ObjectSubclass<child_list_imp::ChildList>)
+        @implements gtk::gio::ListModel;
+}
+
+impl ChildList {
+    pub fn new(tree: &Arc<Tree>, parent: NodeId) -> Self {
+        let obj: Self = glib::Object::new();
+        let _ = obj.imp().tree.set(tree.clone());
+        obj.imp().parent.set(parent);
+        obj
+    }
+
+    /// Drops a deleted child from the list.
+    pub fn remove_node(&self, node: NodeId) {
+        let pos = self.imp().with_items(|ids, objs| {
+            let pos = ids.iter().position(|&id| id == node)?;
+            ids.remove(pos);
+            objs.remove(pos);
+            Some(pos)
+        });
+        if let Some(pos) = pos {
+            self.items_changed(pos as u32, 1, 0);
+        }
+    }
+
+    /// Row objects that have been handed to GTK so far.
+    pub fn created_objects(&self) -> Vec<NodeObject> {
+        match &*self.imp().items.borrow() {
+            Some((_, objs)) => objs.iter().flatten().cloned().collect(),
+            None => Vec::new(),
+        }
+    }
+}

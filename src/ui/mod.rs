@@ -30,6 +30,13 @@ pub fn app_icon_name() -> &'static str {
     }
 }
 
+/// Applies changed settings everywhere.
+pub fn settings_changed() {
+    format::set_decimal_units(settings::get().decimal_units);
+    apply_color_scheme();
+    window::for_each_window(|w| w.apply_settings());
+}
+
 pub fn apply_color_scheme() {
     let scheme = match settings::get().color_scheme {
         settings::ColorScheme::System => adw::ColorScheme::Default,
@@ -169,7 +176,16 @@ fn setup_actions(app: &adw::Application) {
 
 pub fn run(args: Vec<OsString>) -> glib::ExitCode {
     format::set_decimal_units(settings::get().decimal_units);
-    let app = adw::Application::builder().application_id(APP_ID).flags(gio::ApplicationFlags::HANDLES_OPEN).build();
+    let app =
+        adw::Application::builder().application_id(APP_ID).flags(gio::ApplicationFlags::HANDLES_COMMAND_LINE).build();
+    app.add_main_option(
+        "new-window",
+        glib::Char(0),
+        glib::OptionFlags::NONE,
+        glib::OptionArg::None,
+        "Open a new window even if Dendro is already running",
+        None,
+    );
     app.connect_startup(|app| {
         gtk::Window::set_default_icon_name(APP_ID);
         load_css();
@@ -183,14 +199,35 @@ pub fn run(args: Vec<OsString>) -> glib::ExitCode {
             Window::new(app).present();
         }
     });
-    app.connect_open(|app, files, _| {
-        for file in files {
-            let w = Window::new(app);
-            w.present();
-            if let Some(path) = file.path() {
-                w.scan_path(path);
+    // Runs in the first instance, also for later launches (`dendro FOLDER`,
+    // `dendro --new-window`).
+    app.connect_command_line(|app, cmdline| {
+        let new_window = cmdline.options_dict().contains("new-window");
+        let cwd = cmdline.cwd();
+        let paths: Vec<std::path::PathBuf> = cmdline
+            .arguments()
+            .into_iter()
+            .skip(1)
+            .map(|a| {
+                let p = std::path::PathBuf::from(a);
+                match &cwd {
+                    Some(dir) if p.is_relative() => dir.join(p),
+                    _ => p,
+                }
+            })
+            .collect();
+        if paths.is_empty() {
+            match app.active_window() {
+                Some(w) if !new_window => w.present(),
+                _ => Window::new(app).present(),
             }
         }
+        for path in paths {
+            let w = Window::new(app);
+            w.present();
+            w.scan_path(path);
+        }
+        glib::ExitCode::SUCCESS
     });
     let args: Vec<String> = args.iter().map(|a| a.to_string_lossy().into_owned()).collect();
     app.run_with_args(&args)

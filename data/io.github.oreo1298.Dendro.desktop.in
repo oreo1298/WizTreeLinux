@@ -13,4 +13,4 @@ Actions=new-window;
 
 [Desktop Action new-window]
 Name=New Window
-Exec=@BINDIR@/dendro
+Exec=@BINDIR@/dendro --new-window
