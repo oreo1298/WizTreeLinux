@@ -1,0 +1,16 @@
+[Desktop Entry]
+Type=Application
+Name=Dendro
+GenericName=Disk Usage Analyzer
+Comment=Find out what is using your disk space
+Exec=@BINDIR@/dendro %F
+Icon=io.github.oreo1298.Dendro
+Terminal=false
+Categories=GTK;System;Filesystem;
+Keywords=disk;space;usage;storage;size;treemap;analyzer;cleanup;wiztree;windirstat;baobab;
+StartupNotify=true
+Actions=new-window;
+
+[Desktop Action new-window]
+Name=New Window
+Exec=@BINDIR@/dendro

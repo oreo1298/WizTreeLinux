@@ -1,0 +1,74 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  arch:
+    name: Arch Linux (build, test, pacman package)
+    runs-on: ubuntu-latest
+    container: archlinux:latest
+    steps:
+      - name: Install dependencies
+        run: pacman -Syu --noconfirm --needed base-devel git gtk4 libadwaita rust
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Build and test
+        run: |
+          cargo build --release --locked
+          cargo test --release --locked
+      - name: Build the pacman package with makepkg
+        run: |
+          useradd -m builder
+          chown -R builder "$GITHUB_WORKSPACE"
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+          su builder -c "git config --global --add safe.directory '$GITHUB_WORKSPACE' && cd '$GITHUB_WORKSPACE/packaging/arch' && makepkg --noconfirm"
+          pacman -U --noconfirm "$GITHUB_WORKSPACE"/packaging/arch/dendro-*.pkg.tar.zst
+          pacman -Ql dendro
+          dendro --version
+          pacman -R --noconfirm dendro
+
+  ubuntu:
+    name: Ubuntu 24.04 (build, test, install script)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install dependencies
+        run: sudo apt-get update && sudo apt-get install -y libgtk-4-dev libadwaita-1-dev
+      - name: Build and test
+        run: |
+          cargo build --release --locked
+          cargo test --release --locked
+      - name: Install, check and uninstall with the script
+        run: |
+          ./install.sh --no-deps --yes
+          test -x /usr/local/bin/dendro
+          dendro --version
+          ./install.sh uninstall --yes
+          test ! -e /usr/local/bin/dendro
+          ./install.sh --user --no-deps --yes
+          "$HOME/.local/bin/dendro" --version
+          ./install.sh uninstall --yes
+          test ! -e "$HOME/.local/bin/dendro"
+
+  msrv:
+    name: Minimum Rust version (1.85)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install dependencies
+        run: sudo apt-get update && sudo apt-get install -y libgtk-4-dev libadwaita-1-dev
+      - name: Check
+        run: |
+          rustup toolchain install 1.85 --profile minimal
+          cargo +1.85 check --locked
+
+  lint:
+    name: Formatting and shell scripts
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - run: cargo fmt --check
+      - run: shellcheck install.sh

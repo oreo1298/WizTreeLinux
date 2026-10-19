@@ -1,0 +1,63 @@
+/* Dendro styles. Colours come from the libadwaita palette so the app follows
+   the system light/dark preference and accent colour. */
+
+.dendro-summary {
+  padding: 8px 14px 10px 14px;
+}
+
+.dendro-summary image {
+  opacity: 0.85;
+}
+
+.dendro-pane-header {
+  padding: 4px 8px 4px 12px;
+  min-height: 34px;
+}
+
+.dendro-searchbar {
+  padding: 6px 12px;
+}
+
+.dendro-statusbar {
+  padding: 5px 12px;
+}
+
+.dendro-stat {
+  padding: 14px 18px;
+  min-width: 120px;
+}
+
+/* Bars drawn in the accent colour. */
+.dendro-bar,
+treemap {
+  color: @accent_bg_color;
+}
+
+treemap {
+  background-color: @view_bg_color;
+}
+
+levelbar.dendro-usage block.filled.dendro-ok {
+  background-color: @accent_bg_color;
+}
+
+levelbar.dendro-usage block.filled.dendro-warn {
+  background-color: @warning_bg_color;
+}
+
+levelbar.dendro-usage block.filled.dendro-full {
+  background-color: @error_bg_color;
+}
+
+levelbar.dendro-usage trough {
+  min-height: 8px;
+}
+
+columnview.data-table > listview > row > cell {
+  padding-top: 3px;
+  padding-bottom: 3px;
+}
+
+paned > separator {
+  background-color: alpha(currentColor, 0.15);
+}

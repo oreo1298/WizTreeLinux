@@ -1,0 +1,59 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>io.github.oreo1298.Dendro</id>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>MIT</project_license>
+  <name>Dendro</name>
+  <summary>Find out what is using your disk space</summary>
+  <description>
+    <p>
+      Dendro is a fast disk space analyzer in the spirit of WizTree. It scans a
+      drive or folder in parallel and shows where the space went as a sortable
+      folder tree, a list of the largest files, a breakdown by file type and a
+      cushion treemap.
+    </p>
+    <ul>
+      <li>Very fast, multi-threaded scanning that works on every Linux filesystem</li>
+      <li>Shows every file, including hidden files and folders</li>
+      <li>Counts hard links once and does not follow symbolic links</li>
+      <li>Optional scanning as administrator to include protected folders</li>
+      <li>Open, reveal, copy the path of, trash or delete items directly</li>
+      <li>Follows the system light/dark style and accent colour</li>
+    </ul>
+  </description>
+  <launchable type="desktop-id">io.github.oreo1298.Dendro.desktop</launchable>
+  <developer id="io.github.oreo1298">
+    <name>oreo1298</name>
+  </developer>
+  <url type="homepage">https://github.com/oreo1298/WizTreeLinux</url>
+  <url type="bugtracker">https://github.com/oreo1298/WizTreeLinux/issues</url>
+  <url type="vcs-browser">https://github.com/oreo1298/WizTreeLinux</url>
+  <provides>
+    <binary>dendro</binary>
+  </provides>
+  <requires>
+    <display_length compare="ge">360</display_length>
+  </requires>
+  <supports>
+    <control>pointing</control>
+    <control>keyboard</control>
+  </supports>
+  <screenshots>
+    <screenshot type="default">
+      <caption>Folder tree, file types and treemap</caption>
+      <image>https://raw.githubusercontent.com/oreo1298/WizTreeLinux/main/docs/screenshots/results-light.png</image>
+    </screenshot>
+    <screenshot>
+      <caption>Dark style</caption>
+      <image>https://raw.githubusercontent.com/oreo1298/WizTreeLinux/main/docs/screenshots/results-dark.png</image>
+    </screenshot>
+  </screenshots>
+  <content_rating type="oars-1.1"/>
+  <releases>
+    <release version="1.0.0" date="2026-10-19">
+      <description>
+        <p>First release.</p>
+      </description>
+    </release>
+  </releases>
+</component>

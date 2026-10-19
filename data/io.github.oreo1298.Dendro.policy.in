@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE policyconfig PUBLIC
+ "-//freedesktop//DTD PolicyKit Policy Configuration 1.0//EN"
+ "http://www.freedesktop.org/standards/PolicyKit/1/policyconfig.dtd">
+<!--
+  Lets Dendro run its read-only scan helper as root through pkexec.
+  The helper only reads file metadata and writes the results to the
+  calling Dendro window; it never changes anything on disk.
+-->
+<policyconfig>
+  <vendor>Dendro</vendor>
+  <vendor_url>https://github.com/oreo1298/WizTreeLinux</vendor_url>
+  <icon_name>io.github.oreo1298.Dendro</icon_name>
+  <action id="io.github.oreo1298.Dendro.scan">
+    <description>Scan the disk as administrator</description>
+    <message>Authentication is required to include folders your account cannot open in the disk usage scan</message>
+    <defaults>
+      <allow_any>auth_admin</allow_any>
+      <allow_inactive>auth_admin</allow_inactive>
+      <allow_active>auth_admin</allow_active>
+    </defaults>
+    <annotate key="org.freedesktop.policykit.exec.path">@BINDIR@/dendro</annotate>
+    <annotate key="org.freedesktop.policykit.exec.argv1">--scan-helper</annotate>
+  </action>
+</policyconfig>

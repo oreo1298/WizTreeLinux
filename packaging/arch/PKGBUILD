@@ -1,0 +1,48 @@
+# Builds an Arch Linux package from this git checkout.
+#
+#   cd packaging/arch && makepkg -si      install or update
+#   sudo pacman -R dendro                 uninstall
+#
+# The package version is derived from Cargo.toml and the number of commits,
+# so every `git pull` that brings new commits produces a newer package.
+
+_srcroot="$(cd "$startdir/../.." && pwd)"
+
+pkgname=dendro
+pkgver="$(sed -n 's/^version = "\(.*\)"$/\1/p' "$_srcroot/Cargo.toml" | head -n1).r$(git -C "$_srcroot" rev-list --count HEAD 2>/dev/null || echo 0)"
+pkgrel=1
+pkgdesc='Fast WizTree-style disk space analyzer with a treemap (GTK 4 / libadwaita)'
+arch=('x86_64' 'aarch64' 'armv7h' 'i686' 'riscv64')
+url='https://github.com/oreo1298/WizTreeLinux'
+license=('MIT')
+depends=('gtk4' 'libadwaita' 'glib2' 'cairo' 'pango' 'graphene' 'gcc-libs' 'glibc' 'hicolor-icon-theme')
+makedepends=('cargo' 'git')
+optdepends=('polkit: scan as administrator')
+source=()
+sha256sums=()
+
+prepare() {
+  cd "$_srcroot"
+  export RUSTUP_TOOLCHAIN=stable
+  cargo fetch --locked --target "$(rustc -vV | sed -n 's/host: //p')"
+}
+
+build() {
+  cd "$_srcroot"
+  export RUSTUP_TOOLCHAIN=stable
+  export CARGO_TARGET_DIR="$srcdir/target"
+  cargo build --frozen --release
+}
+
+check() {
+  cd "$_srcroot"
+  export RUSTUP_TOOLCHAIN=stable
+  export CARGO_TARGET_DIR="$srcdir/target"
+  cargo test --frozen --release
+}
+
+package() {
+  cd "$_srcroot"
+  make install DESTDIR="$pkgdir" PREFIX=/usr BIN_SRC="$srcdir/target/release/dendro"
+  install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+}

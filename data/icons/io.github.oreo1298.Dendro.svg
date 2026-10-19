@@ -1,0 +1,30 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="128" height="128" viewBox="0 0 128 128">
+  <defs>
+    <linearGradient id="base" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#3d3846"/>
+      <stop offset="1" stop-color="#241f31"/>
+    </linearGradient>
+    <radialGradient id="cushion" cx="0.38" cy="0.32" r="0.85">
+      <stop offset="0" stop-color="#ffffff" stop-opacity="0.45"/>
+      <stop offset="0.55" stop-color="#ffffff" stop-opacity="0.05"/>
+      <stop offset="1" stop-color="#000000" stop-opacity="0.28"/>
+    </radialGradient>
+  </defs>
+  <!-- shadow + base -->
+  <rect x="8" y="12" width="112" height="108" rx="22" fill="#000" opacity="0.18"/>
+  <rect x="8" y="8" width="112" height="108" rx="22" fill="url(#base)"/>
+  <rect x="8.5" y="8.5" width="111" height="107" rx="21.5" fill="none" stroke="#ffffff" stroke-opacity="0.08"/>
+  <!-- treemap blocks -->
+  <g>
+    <rect x="18" y="18" width="50" height="88" rx="7" fill="#3584e4"/>
+    <rect x="18" y="18" width="50" height="88" rx="7" fill="url(#cushion)"/>
+    <rect x="72" y="18" width="38" height="44" rx="7" fill="#e66100"/>
+    <rect x="72" y="18" width="38" height="44" rx="7" fill="url(#cushion)"/>
+    <rect x="72" y="66" width="21" height="40" rx="6" fill="#2ec27e"/>
+    <rect x="72" y="66" width="21" height="40" rx="6" fill="url(#cushion)"/>
+    <rect x="97" y="66" width="13" height="20" rx="4" fill="#c061cb"/>
+    <rect x="97" y="66" width="13" height="20" rx="4" fill="url(#cushion)"/>
+    <rect x="97" y="90" width="13" height="16" rx="4" fill="#f5c211"/>
+    <rect x="97" y="90" width="13" height="16" rx="4" fill="url(#cushion)"/>
+  </g>
+</svg>

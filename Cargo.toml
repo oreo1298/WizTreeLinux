@@ -1,0 +1,27 @@
+[package]
+name = "dendro"
+version = "1.0.0"
+edition = "2021"
+rust-version = "1.85"
+description = "A fast, WizTree-style disk space analyzer for Linux"
+license = "MIT"
+repository = "https://github.com/oreo1298/WizTreeLinux"
+readme = "README.md"
+keywords = ["disk-usage", "treemap", "gtk4", "libadwaita", "wiztree"]
+categories = ["filesystem", "command-line-utilities"]
+
+[dependencies]
+gtk = { package = "gtk4", version = "0.10", features = ["v4_12"] }
+adw = { package = "libadwaita", version = "0.8", features = ["v1_5"] }
+rustix = { version = "1", features = ["fs", "process"] }
+rayon = "1.10"
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
+strip = true
+panic = "unwind"
+
+[profile.dev.package."*"]
+opt-level = 2
