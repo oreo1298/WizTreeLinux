@@ -165,7 +165,8 @@ To try it without installing: `cargo run --release -- ~/Downloads`.
 ## Using Dendro
 
 Start **Dendro** from your application menu, or run `dendro` in a terminal
-(`dendro /some/folder` starts scanning that folder right away). Pick a drive,
+(`dendro /some/folder` starts scanning that folder right away, and
+`dendro --new-window` opens another window). Pick a drive,
 your home folder or any other folder — you can also drop a folder onto the
 window.
 
@@ -181,7 +182,9 @@ window.
   The ↑ button (or the mouse's back button) zooms out again.
 
 Right-click anything for **Open**, **Open Containing Folder**, **Copy Path**,
-**Move to Trash** and **Delete Permanently**.
+**Move to Trash** and **Delete Permanently**. Deleting never reaches into other
+drives: a folder with a drive or network share mounted inside it is left alone
+(unmount it first), and permanent deletion stops at any mount point it meets.
 
 ### Keyboard shortcuts
 
